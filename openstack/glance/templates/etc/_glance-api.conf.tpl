@@ -1,8 +1,43 @@
 [DEFAULT]
-{{- if .Values.ceph.enabled }}
-enabled_backends = swift:swift, ceph-rbd:rbd
-{{- end }}
-debug = {{.Values.api.debug}}
+
+{{- /* Build the backends list based on enabled values */ -}}
+{{- $backends := list -}}
+{{- if .Values.swift.enabled -}}
+  {{- $backends = append $backends "swift:swift" -}}
+{{- end -}}
+{{- if .Values.ceph.enabled -}}
+  {{- $backends = append $backends "ceph-rbd:rbd" -}}
+{{- end -}}
+{{- if .Values.ceph_s3.enabled -}}
+  {{- $backends = append $backends "s3:s3" -}}
+{{- end -}}
+
+{{- /* Require at least one backend */ -}}
+{{- if lt (len $backends) 1 -}}
+  {{- fail "glance: At least one storage backend must be enabled." -}}
+{{- end -}}
+
+{{- /* Derive aliases from backends automatically */ -}}
+{{- $aliases := list -}}
+{{- range $b := $backends -}}
+  {{- if contains ":" $b -}}
+    {{- $aliases = append $aliases (index (split ":" $b) 0) -}}
+  {{- else -}}
+    {{- fail (printf "glance: malformed backend entry %q (expected alias:driver)" $b) -}}
+  {{- end -}}
+{{- end -}}
+{{- $aliases = uniq $aliases -}}
+
+{{- /* Compute and validate default backend (default: swift) */ -}}
+{{- $def := (.Values.default_backend | default "swift") -}}
+{{- if not (has $def $aliases) -}}
+  {{- fail (printf "glance: default_backend %q is not in enabled_backends %v" $def $aliases) -}}
+{{- end -}}
+
+{{- /* Emit enabled_backends here under [DEFAULT] */ -}}
+enabled_backends = {{ join ", " $backends }}
+
+debug = {{ .Values.api.debug }}
 
 registry_host = 127.0.0.1
 
@@ -15,7 +50,7 @@ node_staging_uri = file:///tmp/staging
 
 show_image_direct_url = True
 
-#disable default admin rights for role 'admin'
+# disable default admin rights for role 'admin'
 admin_role = ''
 
 rpc_response_timeout = {{ .Values.rpc_response_timeout | default 300 }}
@@ -30,12 +65,12 @@ image_size_cap = 2199023255552
 auth_plugin = v3password
 auth_version = v3
 auth_interface = internal
-www_authenticate_uri = https://{{include "keystone_api_endpoint_host_public" .}}/v3
-auth_url = {{.Values.global.keystone_api_endpoint_protocol_internal | default "http"}}://{{include "keystone_api_endpoint_host_internal" .}}:{{ .Values.global.keystone_api_port_internal | default 5000}}/v3
-user_domain_name = {{.Values.global.keystone_service_domain | default "Default"}}
-region_name = {{.Values.global.region}}
-project_name = {{.Values.global.keystone_service_project |  default "service"}}
-project_domain_name = {{.Values.global.keystone_service_domain | default "Default"}}
+www_authenticate_uri = https://{{ include "keystone_api_endpoint_host_public" . }}/v3
+auth_url = {{ .Values.global.keystone_api_endpoint_protocol_internal | default "http" }}://{{ include "keystone_api_endpoint_host_internal" . }}:{{ .Values.global.keystone_api_port_internal | default 5000 }}/v3
+user_domain_name = {{ .Values.global.keystone_service_domain | default "Default" }}
+region_name = {{ .Values.global.region }}
+project_name = {{ .Values.global.keystone_service_project | default "service" }}
+project_domain_name = {{ .Values.global.keystone_service_domain | default "Default" }}
 memcached_servers = {{ .Chart.Name }}-memcached.{{ include "svc_fqdn" . }}:{{ .Values.memcached.memcached.port | default 11211 }}
 insecure = True
 token_cache_time = 600
@@ -52,7 +87,9 @@ flavor = keystone
 enable_proxy_headers_parsing = true
 
 [glance_store]
-default_backend = {{ .Values.default_backend | default "swift" | quote }}
+# The validated default backend goes here
+default_backend = {{ $def | quote }}
+
 
 {{- if .Values.file.persistence.enabled }}
 filesystem_store_datadir = /glance_store
@@ -68,6 +105,20 @@ rbd_store_pool = {{ .Values.ceph.pool }}
 rbd_store_chunk_size = 8
 rbd_store_access_timeout = 30
 {{- end}}
+
+{{- if .Values.ceph_s3.enabled }}
+[s3]
+store_description = "RGW S3 for Glance"
+s3_store_host = {{ .Values.ceph_s3.store_host }}
+s3_store_access_key = {{ .Values.ceph_s3.access_key }}
+s3_store_secret_key = {{ .Values.ceph_s3.secret_key }}
+s3_store_bucket = glance
+s3_store_create_bucket_on_put = True
+s3_store_large_object_size = 512
+s3_store_large_object_chunk_size = 50
+s3_store_thread_pool_size = 10
+s3_store_bucket_url_format = path
+{{- end }}
 
 {{- if .Values.swift.enabled }}
 [swift]
